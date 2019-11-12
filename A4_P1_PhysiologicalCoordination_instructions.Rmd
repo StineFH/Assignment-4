@@ -1,0 +1,385 @@
+---
+title: "Assignment 4 - Heart rate, respiration and interpersonal coordination"
+author: "Stine Fabech Hansson"
+date: "August 20, 2019"
+output: 
+  md_document:
+    variant: markdown_github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Assignment 4 - Heart rate, respiration and interpersonal coordination
+
+Physiological data (here heart rate [variability], and respiration) are increasingly popular. Historically treated as pernicious noise to be regressed out of neuro-imaging data, there is now increasing research on how these signals tell us something important about cognition and beyond being just a signal of cognitive processes also impact them in interesting ways. Advanced sport science, and the quantified self movement (closely followed by marketing and communication) have hailed continuous physiological tracking as a powerful way to access and modify attitudes, habits, and performance. Further, as team coordination (in the military, in decision processes and organizational contexts) is more and more in focus, research has attempted to measure how interpersonal coordination between physiological systems might tell us something important about e.g. emotional and cognitive coordination. See references in the reading list for more on this.
+
+In this assignment, you will learn to:
+- collect physiological data
+- pre-process physiological data (and grow further your mad R skills)
+- model the continuous interdependence between two signals (using a multilevel model as proxy for a dynamical system approach)
+- conservatively assess the presence of coordination between to signals in a controlled context
+
+This assignment has two parts. The first part familiarizes you with heart rate, and respiration data and their preprocessing. The second part explores how to analyze interpersonal coordination of these signals.
+
+These are the questions you need to be able to answer at the end of the assignment (aka that you need to submit as part of the portfolio)
+
+1) How do you preprocess heart rate and respiration data? Describe the process. If any data needs to be excluded, list the excluded data and motivate the exclusion.
+
+2) Do you observe interpersonal coordination in heart rate and respiration? Describe your control baseline, the method used to quantify coordination, and the statistical models used to infer whether coordination was higher than in the baseline. Report the results of the models.
+
+3) Do you observe differences in coordination between conditions? Report the models and results.
+
+4) Is respiration coordination a likely driver of heart rate coordination? Describe how you would test for it. Bonus points if you actually run the tests and report methods and results.
+
+N.B. to give you a bit more data I included data from previous years (Study1, Study2 and Study 3). Note that synchronouns and turn-taking are the same across both studies, but the third condition is different: in the first year it was self-paced joint reading; in the second year it was the tv-series conversation.
+
+## Let's get started
+
+### Exploring physiological signals
+
+- Choose one pair (one pair, three conditions)
+- Load the logs
+- Produce a plot of the participants' respiration signal and a different one of the participants' HR signal.
+  N.B: remember the slides: artifacts, downsampling, scaling.
+  N.B. The gridExtra::grid.arrange() function allows you to display the plots side by side. E.g. grid.arrange(plot1, plot2, plot3, ncol=3). There are also smarter packages, like cowplot and ggpubr.
+- Can you eye-ball which condition if any displays more physiological coordination?
+
+### First we read one data file and identify the procedure
+- Load the file
+- correctly identify all columns
+- plot the data
+- deal with the artifacts
+- downsample the dat
+- Add a column for study, group, trial and condition
+
+```{r}
+# Load the libraries
+library(pacman)
+p_load(tidyverse, gridExtra, groupdata2, stringr)
+
+# Load the file
+sync <- read.csv("data/Study4_G3_T3_Synchronous.csv", header = T, sep = ",")
+
+# Plot
+Resp_plot <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, Resp1, color = "P1")) +
+  geom_path(aes(TimeMs, Resp2, color = "P2")) +
+  labs(x = "Time", y = "Respiration") +
+  theme(legend.position="bottom")
+Resp_plot
+
+HR_plot <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, HR1, color = "P1")) +
+  geom_path(aes(TimeMs, HR2, color = "P2")) +
+  labs(x = "Time", y = "Heart rate") +
+  theme(legend.position="bottom")
+HR_plot
+
+grid.arrange(Resp_plot, HR_plot)
+
+## Remove outliers
+
+### Tip, check the function below
+removeOuts <- function(ts,threshold){
+  SD_plus=(mean(ts,na.rm=T) + sd(ts,na.rm=T)*2.5)
+  SD_minus=(mean(ts,na.rm=T) - sd(ts,na.rm=T)*2.5)
+  
+  ts[ts > (mean(ts,na.rm=T) + (threshold*sd(ts,na.rm=T)))] = SD_plus
+  ts[ts < (mean(ts,na.rm=T) - (threshold*sd(ts,na.rm=T)))] = SD_minus # This works so that values that where bigger/smaller than 2.5*SD away from the mean are now equal to SD*2.5 + mean
+  return(ts)
+}
+threshold=2.5 # Default value at 2.5 sds from the mean
+
+sync$Resp1_remov <- removeOuts(sync$Resp1, threshold)
+
+sync$Resp2_remov <- removeOuts(sync$Resp2, threshold)
+
+sync$HR1_remov <- removeOuts(sync$HR1, threshold)
+
+sync$HR2_remov <- removeOuts(sync$HR2, threshold)
+
+# Plot raw data againt those with the artiacts removed
+r1 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, Resp1, color = "Orignal")) +
+  geom_path(aes(TimeMs, Resp1_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Respiration") +
+  theme(legend.position="bottom") + ggtitle("Participant 1")
+r2 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, Resp2, color = "original")) +
+  geom_path(aes(TimeMs, Resp2_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Respiration") +
+  theme(legend.position="bottom") + ggtitle("Participant 2")
+r3 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, HR1, color = "original")) +
+  geom_path(aes(TimeMs, HR1_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Heart rate") +
+  theme(legend.position="bottom") + ggtitle("Participant 1")
+r3
+r4 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, HR2, color = "original")) +
+  geom_path(aes(TimeMs, HR2_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Heart rate") +
+  theme(legend.position="bottom") + ggtitle("Participant 2")
+
+grid.arrange(r1, r2, r3, r4)
+
+## Scale
+### Tip: if scale() gives some issues, try the one below
+#z_scale <- function(column){
+#  column_c <- (column - mean(column)) / sd(column)
+#}
+
+sync$Resp1 <- scale(sync$Resp1_remov)
+sync$Resp2 <- scale(sync$Resp2_remov)
+sync$HR1 <- scale(sync$HR1_remov)
+sync$HR2 <- scale(sync$HR2_remov)
+
+
+# Plot again to check how scaled data look like
+s1 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, Resp1, color = "Scaled")) +
+  geom_path(aes(TimeMs, Resp1_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Respiration") +
+  theme(legend.position="bottom") + ggtitle("Participant 1")
+s2 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, Resp2, color = "Scaled")) +
+  geom_path(aes(TimeMs, Resp2_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Respiration") +
+  theme(legend.position="bottom") + ggtitle("Participant 2")
+s3 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, HR1, color = "Scaled")) +
+  geom_path(aes(TimeMs, HR1_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Heart rate") +
+  theme(legend.position="bottom") + ggtitle("Participant 1")
+s4 <- ggplot(data = sync) +
+  geom_path(aes(TimeMs, HR2, color = "Scaled")) +
+  geom_path(aes(TimeMs, HR2_remov, color = "without outliers")) +
+  labs(x = "Time", y = "Heart rate") +
+  theme(legend.position="bottom") + ggtitle("Participant 2")
+
+grid.arrange(s1, s2, s3, s4)
+
+sync$rowname <- rep(1:177323, 1)
+
+## Downsample
+### This is tricky, so you can have a look at my code  (relying on Ludvig's groupdata2) if you get stuck
+d1 = sync %>%
+ group(n = 100, method = 'greedy') %>%
+ dplyr::summarise(
+   time = mean(TimeMs,na.rm=T),
+   HR1 = mean(HR1,na.rm=T),
+   HR2 = mean(HR2,na.rm=T),
+   Resp1 = mean(Resp1,na.rm=T),
+   Resp2 = mean(Resp2,na.rm=T),
+   rowname = rowname[1]) #the index we use to put them back together
+
+
+## Plot the downsampled data
+p4 <- ggplot(data = d1) +
+  geom_path(aes(time, Resp1, color = "Participant 1")) +
+  geom_path(aes(time, Resp2, color = "Participant 2")) +
+  labs(x = "time", y = "Respiration") +
+  theme(legend.position="bottom")
+p4
+
+p5 <- ggplot(data = d1) +
+  geom_path(aes(time, HR1, color = "Participant 1")) +
+  geom_path(aes(time, HR2, color = "Participant 2")) +
+  labs(x = "time", y = "Heart rate") +
+  theme(legend.position="bottom")
+p5
+
+## Now add the group, trial, condition to the cleaned up, scaled, downsampled data
+## Tip the info is in the file name
+
+
+  read_file_name <- function(filename) {
+    # load data
+    data <- read.delim(filename)
+    # parse filename to extract study, diagnosis, subject and trial
+    df <- as.data.frame(t(unlist(regmatches(filename, gregexpr("[[:digit:]]+\\.*[[:digit:]]*", filename)))))
+    
+    df$condition <- word(filename, start = -1, sep = "_")
+    
+    return(df)
+}
+
+phys_data <- read_file_name("data/Study1_G1_T1_Synchronous.csv")
+
+listed<-list.files(path="C:/Users/stine/OneDrive/Cognitive Science/3rd_Semester/exp_meth_3/git/Assignment-4", pattern="*.csv") %>% 
+    purrr::map_df(read_file_name) 
+
+phys_data <- listed %>%  rename(study=V1, group = V2, condition= condition,  t=V3) %>% select(-c(t))
+
+phys_data$condition <- str_sub(phys_data$condition, end=-5)
+
+```
+
+
+## Now we are ready to go to load and pre-process all files
+
+Go through all the files (with a function passed onto map_df), check which files should be excluded, if any, and save the pre-processed time-series
+
+A couple of tips:
+- looping is oh so slow. Making a function and using Map/Map_df is your salvation.
+- each study restarts the group numbering, so you should make sure to change that (e.g. 100 * Study + Group)
+- you need to make sure all the data are meaningful or something has to be removed. Plotting is your friend. E.g. "Study1_G1_T1_Synchronous" has one bad respiration signal. We could replace it with NAs
+
+
+```{r}
+# Define a function running the loading, artifact removal, scaling, downsampling, info adding.
+
+#### Function for preprocessing all data 
+read_filename <- function(filename){
+     # load data
+     data <- read.delim(filename, sep = ",")
+     
+     #we remove outliers
+     data$Resp1<-removeOuts(data$Resp1,2.5)
+     data$Resp2<-removeOuts(data$Resp2,2.5)
+     data$HR1<-removeOuts(data$HR1,2.5)
+     data$HR2<-removeOuts(data$HR2,2.5)
+     
+     #we scale
+     data$Resp1<-scale(data$Resp1)
+     data$Resp2<-scale(data$Resp2)
+     data$HR1<-scale(data$HR1)
+     data$HR2<-scale(data$HR2)
+     
+     #we downsample
+     data$rowname<-rep(1:nrow(data),1)
+     data = data %>%
+      group(n = 100, method = 'greedy') %>%
+      dplyr::summarise(
+        time = mean(time,na.rm=T),
+        HR1 = mean(HR1,na.rm=T),
+        HR2 = mean(HR2,na.rm=T),
+        Resp1 = mean(Resp1,na.rm=T),
+        Resp2 = mean(Resp2,na.rm=T),
+        rowname = rowname[1])
+     
+    # parse filename to extract study, diagnosis, subject and trial
+     data$condition <- word(filename, start = -1, sep = "_")
+     data$condition<-str_sub(data$condition, end = -5)
+     
+     data$group <- word(filename, start = -3, sep = "_")
+     data$group<-str_sub(data$group, start = 2)
+     
+     data$study <- word(filename, start = 1, sep = "_")
+     data$study<-str_sub(data$study, start = 6)
+     
+     data$.groups = NULL
+     data$rowname = NULL
+     
+     return(data)
+}
+
+
+listed<-list.files(path="C:/Users/stine/OneDrive/Cognitive Science/3rd_Semester/exp_meth_3/git/Assignment-4", pattern="*.csv") %>% 
+    purrr::map_df(read_filename) 
+
+listed <- listed %>% mutate(uPairID = paste(study, group, sep = "_"), #Create unique pair ID
+                    uPairID = as.numeric(as.factor(uPairID)))
+
+
+#  Identify all files to be read
+
+# Run the function on the whole dataset using map_df
+
+         
+# Now we need to make sure all the data are meaningful or something has to be removed
+# E.g. "Study1_G1_T1_Synchronous" has one bad respiration signal. We could replace it with NAs
+
+# plots plots plots
+
+# Remove bad data
+
+# Save the data
+
+```
+
+## Now we need to run some analysis
+
+Let's start with a multilevel model that accounts for 
+- stability (how each signal is autocorrelated)
+- interpersonal dependence (each signal is dependent from the previous state of the other signal)
+
+The data needs to be further prepared, so we can analyze both participants in the same model.
+We need to turn the data into a long format:
+- a column indicating own hr and one own respiration
+- a column indicating other hr and one other respiration
+- a column indicating change in hr from previous round and one in respiration
+
+We can then run an analysis where change is a function of one's previous state (stability, see slides), and the other's previous state (coupling). Make sure to:
+- set up the most interesting contrasts: how do these parameters vary by condition? which condition should be baseline?
+- set up the right random effects.
+- N.B. the model will be slow. Make sure it works on a subset of the data first!
+
+Bonus question: what if we include an additional layer? Is my heart rate just adjusting to yours, or also to how much you are adjusting to mine?
+- to start answering this we can add a column indicating the previous change in hr in the other and one in respiration
+- we can then build on the previous models by also adding the previous change in the other
+
+
+```{r}
+
+# Genearate a column for each: previous HR1, HR2, Resp1, Resp2
+# Genearate a column for each: change in HR1, HR2, Resp1, Resp2
+
+
+# Make the data long, so we can analyze both participants at the same time 
+## N.B. This is a bit tricky and you might have to do it in several steps
+
+# Set the most interesting contrast e.g. by defining synchronous or conversation as the baseline
+
+# Model change as a function of own and other previous state 
+
+
+# Bonus points: Add to the previous model also change in the other to see whether my adaptation is influenced by the other's adaptation.
+
+```
+
+
+## Now we need to create control baselines.
+
+First shuffled controls, then surrogate pairs.
+
+### Creating controls: shuffled controls
+
+Shuffled controls break the temporal dependencies of time-series by shuffling the value within one time-series. This ensures the "coordination" observed is not due to the actual values in the series and not their sequence.
+Tip: sample() is your friend, but make sure to shuffle things within participant/condition and not throughout the whole dataset
+ 
+```{r}
+
+# Create a shuffled dataset
+# Concatenate it to the original dataset (and remember to have a column telling you which is which)
+
+# Create the same models as in the previous chunk, but adding an interaction by shuffled vs. real
+
+```
+ 
+ 
+### TRICKY! Creating controls: surrogate pair controls
+ - Per each real pair, identify at least one surrogate pair (matching one of the participants, with somebody doing the same task, but in a different pair)
+
+```{r}
+
+# Identify unique pairs within a given study (to keep things manageable) and create list of possible surrogate pairs (e.g. individual 1 from pair 1 and individual 2 from pair 2)
+
+# Starting from the wide format, create "surrogate" dataset with the data from surrogate pairs
+
+# Make it into long format
+
+# Create models as in chunks above, but adding an interaction with the Real vs. Surrogate variable (exclude shuffled ones for simplicity)
+
+
+
+```
+ 
+
+### Effects of respiration coordination on heart rate coordination
+ - describe how you would test those.
+ - Optional: run the models and report them
+
+ 
